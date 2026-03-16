@@ -2,13 +2,19 @@
  * HCI H:4 bridge — ESP32-S3 VHCI ↔ TinyUSB CDC-ACM
  *
  * Data flow:
- *   Linux (btattach) ──USB CDC──► CDC RX callback ──queue──► VHCI send task ──► BT controller
- *   BT controller ──► VHCI recv callback ──────────────────────────────────────► USB CDC TX
+ *   Linux ──USB CDC──► CDC RX callback ──s_to_vhci_q──► vhci_send_task ──► BT controller
+ *   BT controller ──► vhci_notify_recv ──s_from_vhci_q──► usb_send_task ──► USB CDC TX
+ *
+ * Both queues are necessary:
+ *   - to-VHCI:   flow-controlled by the VHCI "send available" semaphore.
+ *   - from-VHCI: decouples the BT-task callback from TinyUSB writes, which
+ *                must happen from a regular FreeRTOS task (not a callback) so
+ *                that write_flush can block until the USB endpoint is free.
  *
  * The VHCI interface delivers/receives complete HCI packets that already carry
  * the H:4 packet-indicator byte as their first byte (0x01=CMD, 0x02=ACL,
- * 0x04=EVT).  So both directions are simple pass-through once we have
- * reassembled a complete packet from the (possibly fragmented) CDC RX stream.
+ * 0x04=EVT).  Both directions are therefore simple pass-through once a
+ * complete packet has been reassembled from the CDC RX byte stream.
  */
 
 #include <string.h>
@@ -56,8 +62,13 @@ typedef enum {
 
 /* ── Module state ───────────────────────────────────────────────────────── */
 
-/* Queue of complete packets waiting to be forwarded to the VHCI. */
-static QueueHandle_t    s_to_vhci_q;
+/* Queue of complete packets waiting to be forwarded to the VHCI (host→ctrl). */
+static QueueHandle_t     s_to_vhci_q;
+
+/* Queue of complete packets received from the VHCI, waiting to be sent to the
+ * USB host (ctrl→host).  Populated in the BT-task callback; drained by
+ * usb_send_task so that TinyUSB writes happen from a proper task context. */
+static QueueHandle_t     s_from_vhci_q;
 
 /* Semaphore released by notify_host_send_available: signals the VHCI send
  * task that the controller is ready to accept another packet. */
@@ -183,19 +194,23 @@ static void vhci_notify_send_available(void)
 }
 
 /* Called by the BT controller with a complete outbound HCI packet
- * (type byte is already the first byte of data). */
+ * (type byte is already the first byte of data).
+ * We must NOT call TinyUSB write functions here — this runs inside the BT
+ * controller task and write_flush would need to block waiting for the USB
+ * endpoint, which is not allowed in a callback.  Queue instead. */
 static int vhci_notify_recv(uint8_t *data, uint16_t len)
 {
-    /* Write directly to the CDC TX FIFO; flush with no wait (btattach will
-     * re-request if it needs flow control). */
-    esp_err_t err = tinyusb_cdcacm_write_queue(TINYUSB_CDC_ACM_0, data, len);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "CDC write_queue error: %s", esp_err_to_name(err));
-    } else {
-        err = tinyusb_cdcacm_write_flush(TINYUSB_CDC_ACM_0, 0);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "CDC write_flush error: %s", esp_err_to_name(err));
-        }
+    if (len == 0 || len > MAX_HCI_PKT) {
+        ESP_LOGW(TAG, "ctrl→host: ignoring packet with bad length %u", len);
+        return 0;
+    }
+
+    hci_pkt_t pkt;
+    memcpy(pkt.data, data, len);
+    pkt.len = len;
+
+    if (xQueueSend(s_from_vhci_q, &pkt, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "ctrl→host queue full, packet dropped (type=0x%02x)", data[0]);
     }
     return 0;
 }
@@ -204,6 +219,37 @@ static const esp_vhci_host_callback_t s_vhci_cb = {
     .notify_host_send_available = vhci_notify_send_available,
     .notify_host_recv           = vhci_notify_recv,
 };
+
+/* ── USB send task (ctrl→host) ──────────────────────────────────────────── */
+
+/* Drains s_from_vhci_q and writes each packet to the CDC TX FIFO.
+ * Runs as a regular FreeRTOS task so that write_flush can block until the
+ * USB endpoint is free without violating callback constraints. */
+static void usb_send_task(void *arg)
+{
+    (void)arg;
+    hci_pkt_t pkt;
+
+    for (;;) {
+        if (xQueueReceive(s_from_vhci_q, &pkt, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+
+        esp_err_t err = tinyusb_cdcacm_write_queue(TINYUSB_CDC_ACM_0,
+                                                   pkt.data, pkt.len);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "CDC write_queue: %s", esp_err_to_name(err));
+            continue;
+        }
+
+        /* Block up to 200 ms for the USB endpoint to become free. */
+        err = tinyusb_cdcacm_write_flush(TINYUSB_CDC_ACM_0,
+                                         pdMS_TO_TICKS(200));
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "CDC write_flush: %s", esp_err_to_name(err));
+        }
+    }
+}
 
 /* ── VHCI send task ─────────────────────────────────────────────────────── */
 
@@ -242,9 +288,16 @@ esp_err_t hci_bridge_init(void)
         return ESP_ERR_NO_MEM;
     }
 
+    s_from_vhci_q = xQueueCreate(QUEUE_DEPTH, sizeof(hci_pkt_t));
+    if (!s_from_vhci_q) {
+        vQueueDelete(s_to_vhci_q);
+        return ESP_ERR_NO_MEM;
+    }
+
     s_send_avail_sem = xSemaphoreCreateBinary();
     if (!s_send_avail_sem) {
         vQueueDelete(s_to_vhci_q);
+        vQueueDelete(s_from_vhci_q);
         return ESP_ERR_NO_MEM;
     }
 
@@ -254,16 +307,19 @@ esp_err_t hci_bridge_init(void)
         return err;
     }
 
-    /* Pin to core 0 to avoid contention with the BT controller (core 0). */
+    /* vhci_send_task: host→controller.  Pin to core 0 alongside BT controller. */
     BaseType_t rc = xTaskCreatePinnedToCore(
         vhci_send_task, "vhci_send", 4096, NULL, 5, NULL, 0);
     if (rc != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
 
-    /* Register CDC RX callback.  The tinyusb_cdcacm_init() call in main.c
-     * passes this function pointer; we expose a non-static symbol so that
-     * the linker can resolve it from there. */
+    /* usb_send_task: controller→host.  No core affinity needed. */
+    rc = xTaskCreate(usb_send_task, "usb_send", 4096, NULL, 5, NULL);
+    if (rc != pdPASS) {
+        return ESP_ERR_NO_MEM;
+    }
+
     ESP_LOGI(TAG, "HCI bridge initialised");
     return ESP_OK;
 }
