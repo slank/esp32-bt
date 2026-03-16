@@ -235,16 +235,23 @@ static void usb_send_task(void *arg)
             continue;
         }
 
-        esp_err_t err = tinyusb_cdcacm_write_queue(TINYUSB_CDC_ACM_0,
-                                                   pkt.data, pkt.len);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "CDC write_queue: %s", esp_err_to_name(err));
+        /* tinyusb_cdcacm_write_queue returns size_t (bytes enqueued), NOT
+         * esp_err_t.  A non-zero return means data was accepted into the TX
+         * FIFO; zero means the FIFO was full and nothing was written. */
+        size_t written = tinyusb_cdcacm_write_queue(TINYUSB_CDC_ACM_0,
+                                                    pkt.data, pkt.len);
+        if (written == 0) {
+            ESP_LOGW(TAG, "CDC TX FIFO full, ctrl→host packet dropped (type=0x%02x)", pkt.data[0]);
             continue;
         }
+        if (written < pkt.len) {
+            ESP_LOGW(TAG, "CDC TX partial write: %zu/%u bytes", written, pkt.len);
+        }
 
-        /* Block up to 200 ms for the USB endpoint to become free. */
-        err = tinyusb_cdcacm_write_flush(TINYUSB_CDC_ACM_0,
-                                         pdMS_TO_TICKS(200));
+        /* Flush the FIFO to the USB IN endpoint.  Block up to 200 ms.
+         * Without this call the data sits in the FIFO and is never sent. */
+        esp_err_t err = tinyusb_cdcacm_write_flush(TINYUSB_CDC_ACM_0,
+                                                   pdMS_TO_TICKS(200));
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "CDC write_flush: %s", esp_err_to_name(err));
         }
@@ -265,14 +272,11 @@ static void vhci_send_task(void *arg)
         }
 
         /* Wait until the controller is ready to accept a packet.
-         * Check first in case the semaphore was already given before we got
-         * here; otherwise block until notify_host_send_available fires. */
-        if (!esp_vhci_host_check_send_available()) {
-            xSemaphoreTake(s_send_avail_sem, portMAX_DELAY);
-        } else {
-            /* Drain any stale "available" signals so the semaphore count
-             * stays tidy, but don't block. */
-            xSemaphoreTake(s_send_avail_sem, 0);
+         * Poll with a short delay to avoid relying on the semaphore being
+         * given before hci_bridge_init() was called (race window between
+         * esp_bt_controller_enable and esp_vhci_host_register_callback). */
+        while (!esp_vhci_host_check_send_available()) {
+            xSemaphoreTake(s_send_avail_sem, pdMS_TO_TICKS(5));
         }
 
         esp_vhci_host_send_packet(pkt.data, pkt.len);
