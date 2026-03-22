@@ -11,7 +11,7 @@ The format is based on Keep a Changelog, and this project uses SemVer tags.
 - Downloadable firmware bundles via GitHub Actions artifacts and tag-driven GitHub Releases.
 - Versioned artifact naming and a release note template for GitHub Releases.
 
-## [2.0.0] - 2026-03-22
+## [0.1.0] - 2026-03-22
 
 ### Added
 - Initial public baseline for the ESP32-S3 BLE HCI H:4 bridge over USB CDC-ACM.
