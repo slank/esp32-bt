@@ -1,0 +1,75 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  firmware-build:
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v5.5.3
+
+    env:
+      PROJECT_NAME: esp32_bt_hci_bridge
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Compute artifact version
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            short_sha="$(printf '%.7s' "${GITHUB_SHA}")"
+            ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr '/:@ ' '----')"
+            version="${ref_slug}-${short_sha}"
+          fi
+          echo "ARTIFACT_VERSION=${version}" >> "${GITHUB_ENV}"
+
+      - name: Show ESP-IDF version
+        run: |
+          . /opt/esp/idf/export.sh
+          idf.py --version
+
+      - name: Build firmware
+        run: |
+          . /opt/esp/idf/export.sh
+          idf.py build
+
+      - name: Prepare firmware bundle
+        run: |
+          mkdir -p dist
+          cp build/bootloader/bootloader.bin dist/
+          cp build/partition_table/partition-table.bin dist/
+          cp build/${PROJECT_NAME}.bin dist/
+          cp build/flasher_args.json dist/
+          cp README.md dist/README.md
+          cp LICENSE dist/LICENSE
+          cd dist
+          sha256sum \
+            bootloader.bin \
+            partition-table.bin \
+            ${PROJECT_NAME}.bin \
+            flasher_args.json \
+            README.md \
+            LICENSE > SHA256SUMS-${ARTIFACT_VERSION}.txt
+          tar -czf ${PROJECT_NAME}-${ARTIFACT_VERSION}-firmware.tar.gz \
+            bootloader.bin \
+            partition-table.bin \
+            ${PROJECT_NAME}.bin \
+            flasher_args.json \
+            README.md \
+            LICENSE \
+            SHA256SUMS-${ARTIFACT_VERSION}.txt
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PROJECT_NAME }}-${{ env.ARTIFACT_VERSION }}
+          path: |
+            dist/${{ env.PROJECT_NAME }}-${{ env.ARTIFACT_VERSION }}-firmware.tar.gz
+            dist/SHA256SUMS-${{ env.ARTIFACT_VERSION }}.txt

@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
 /*
  * app_main — initialise NVS, BT controller (BLE-only), TinyUSB CDC-ACM,
  * then start the HCI H:4 bridge.

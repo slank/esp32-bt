@@ -1,0 +1,34 @@
+changelog:
+  categories:
+    - title: Firmware changes
+      labels:
+        - enhancement
+        - feature
+        - firmware
+    - title: Fixes
+      labels:
+        - bug
+        - fix
+    - title: Documentation and maintenance
+      labels:
+        - documentation
+        - chore
+        - ci
+    - title: Other changes
+      labels:
+        - "*"
+
+change-template: "- $TITLE (#$NUMBER)"
+no-changes-template: "- No pull-requested changes were categorized for this release."
+template: |
+  ## Firmware bundle
+
+  Download the attached firmware archive for this release tag and flash it using the instructions in `README.md`.
+
+  Included assets:
+  - Versioned firmware archive
+  - Versioned SHA256 checksums
+
+  ## Changes
+
+  $CHANGES

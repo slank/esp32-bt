@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
 /*
  * HCI H:4 bridge — ESP32-S3 VHCI ↔ TinyUSB CDC-ACM
  *

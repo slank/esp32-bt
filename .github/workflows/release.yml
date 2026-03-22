@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - v*
+
+permissions:
+  contents: write
+
+jobs:
+  publish-firmware:
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v5.5.3
+
+    env:
+      PROJECT_NAME: esp32_bt_hci_bridge
+      RELEASE_TAG: ${{ github.ref_name }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build firmware
+        run: |
+          . /opt/esp/idf/export.sh
+          idf.py build
+
+      - name: Set release asset names
+        run: |
+          echo "ASSET_BASENAME=${PROJECT_NAME}-${RELEASE_TAG}" >> "${GITHUB_ENV}"
+          echo "CHECKSUM_NAME=SHA256SUMS-${RELEASE_TAG}.txt" >> "${GITHUB_ENV}"
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p dist
+          cp build/bootloader/bootloader.bin dist/
+          cp build/partition_table/partition-table.bin dist/
+          cp build/${PROJECT_NAME}.bin dist/
+          cp build/flasher_args.json dist/
+          cp README.md dist/README.md
+          cp LICENSE dist/LICENSE
+          cd dist
+          sha256sum \
+            bootloader.bin \
+            partition-table.bin \
+            ${PROJECT_NAME}.bin \
+            flasher_args.json \
+            README.md \
+            LICENSE > ${CHECKSUM_NAME}
+          tar -czf ${ASSET_BASENAME}-firmware.tar.gz \
+            bootloader.bin \
+            partition-table.bin \
+            ${PROJECT_NAME}.bin \
+            flasher_args.json \
+            README.md \
+            LICENSE \
+            ${CHECKSUM_NAME}
+
+      - name: Publish GitHub release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/${{ env.ASSET_BASENAME }}-firmware.tar.gz
+            dist/${{ env.CHECKSUM_NAME }}

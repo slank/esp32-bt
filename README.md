@@ -8,6 +8,8 @@ API) to Linux over a USB CDC-ACM serial port, using the standard HCI H:4
 framing.  Linux attaches it with `btattach`, creating a normal `hci0` device.
 No custom kernel driver is needed.
 
+This project is licensed under Apache-2.0. See `LICENSE` for details.
+
 ```
 Linux (BlueZ)
     │  HCI H:4 over USB CDC-ACM (/dev/ttyACM0)
@@ -29,6 +31,31 @@ ESP32-S3 BLE controller
 idf.py build
 idf.py -p /dev/ttyACM0 flash   # or use esptool directly
 ```
+
+## Download prebuilt firmware
+
+Tagged releases publish a firmware bundle that includes:
+
+- `esp32_bt_hci_bridge.bin`
+- `bootloader.bin`
+- `partition-table.bin`
+- `flasher_args.json`
+- `SHA256SUMS-<tag>.txt`
+
+Download the latest release asset from GitHub Releases, extract it, then flash with `esptool.py`:
+
+```bash
+esptool.py --chip esp32s3 \
+  --before default_reset --after hard_reset \
+  write_flash \
+  --flash_mode dio --flash_size 2MB --flash_freq 80m \
+  0x0 bootloader.bin \
+  0x8000 partition-table.bin \
+  0x10000 esp32_bt_hci_bridge.bin
+```
+
+The release bundle also includes `flasher_args.json` if you prefer to script flashing from the generated manifest.
+CI workflow artifacts use the same versioned naming pattern, based on the tag when present or the source ref plus short commit SHA for non-tag builds.
 
 ## One-time Linux setup
 
@@ -132,3 +159,11 @@ H:4 packet-type bytes (included as byte 0 by both Linux and the VHCI API):
 | `0x01` | HCI Command (host → controller) |
 | `0x02` | ACL Data (both directions) |
 | `0x04` | HCI Event (controller → host) |
+
+## Contributing
+
+See `.github/CONTRIBUTING.md` for development and pull request expectations.
+
+## License
+
+This repository is licensed under the Apache License, Version 2.0. Third-party component versions are recorded in `dependencies.lock`.
