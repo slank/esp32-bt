@@ -88,16 +88,7 @@ jobs:
             --jq '.[].tagName')
 
           echo "${releases_json}" > /tmp/releases.json
-          python3 -c '
-import json
-html = open("site/index.html").read()
-releases = json.load(open("/tmp/releases.json"))
-html = html.replace(
-    "window.RELEASES = window.RELEASES || [];",
-    "window.RELEASES = " + json.dumps(releases) + ";"
-)
-open("site/index.html", "w").write(html)
-'
+          python3 -c 'import json,pathlib;p=pathlib.Path("site/index.html");r=json.loads(pathlib.Path("/tmp/releases.json").read_text());p.write_text(p.read_text().replace("window.RELEASES = window.RELEASES || [];","window.RELEASES = "+json.dumps(r)+";"))'
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
