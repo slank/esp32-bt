@@ -25,6 +25,23 @@ ESP32-S3 BLE controller
 - [ESP-IDF v5.5.3](https://docs.espressif.com/projects/esp-idf/en/v5.5.3/)
 - Linux host with BlueZ (`bluez` package) and the `cdc_acm` kernel module
 
+## Wiki submodule
+
+The `wiki/` directory is a git submodule (`esp32-bt.wiki.git`).
+A plain `git clone` does not populate submodules automatically.
+
+Clone with submodules:
+
+```bash
+git clone --recurse-submodules https://github.com/slank/esp32-bt.git
+```
+
+Or, after cloning:
+
+```bash
+git submodule update --init --recursive
+```
+
 ## Build & flash
 
 ```bash
