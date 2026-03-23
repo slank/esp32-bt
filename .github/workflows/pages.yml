@@ -1,0 +1,119 @@
+name: Deploy Pages
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      num_releases:
+        description: Number of recent releases to include
+        default: '5'
+        required: false
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-site:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PROJECT_NAME: esp32_bt_hci_bridge
+      NUM_RELEASES: ${{ inputs.num_releases || '5' }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Fetch releases and build site
+        run: |
+          mkdir -p site
+          cp -r web/. site/
+
+          releases_json='[]'
+
+          while read -r tag; do
+            tarball="${PROJECT_NAME}-${tag}-firmware.tar.gz"
+            mkdir -p "dist/${tag}"
+
+            if ! gh release download "${tag}" \
+                --repo "${{ github.repository }}" \
+                --pattern "${tarball}" \
+                --dir "dist/${tag}" 2>/dev/null; then
+              echo "Skipping ${tag}: tarball not found"
+              continue
+            fi
+
+            tar -xzf "dist/${tag}/${tarball}" -C "dist/${tag}" \
+              bootloader.bin partition-table.bin "${PROJECT_NAME}.bin"
+
+            mkdir -p "site/${tag}"
+            cp "dist/${tag}/bootloader.bin"        "site/${tag}/"
+            cp "dist/${tag}/partition-table.bin"   "site/${tag}/"
+            cp "dist/${tag}/${PROJECT_NAME}.bin"   "site/${tag}/"
+
+            jq -n \
+              --arg version "${tag}" \
+              --arg app "${PROJECT_NAME}.bin" \
+              '{
+                name: "ESP32 BT HCI Bridge",
+                version: $version,
+                new_install_prompt_erase: false,
+                builds: [{
+                  chipFamily: "ESP32-S3",
+                  parts: [
+                    {path: "bootloader.bin", offset: 0},
+                    {path: "partition-table.bin", offset: 32768},
+                    {path: $app, offset: 65536}
+                  ]
+                }]
+              }' > "site/${tag}/manifest.json"
+
+            releases_json=$(echo "${releases_json}" | jq \
+              --arg tag "${tag}" \
+              --arg repo "${{ github.repository }}" \
+              '. + [{
+                tag: $tag,
+                manifestUrl: ("./"+$tag+"/manifest.json"),
+                releaseUrl: ("https://github.com/"+$repo+"/releases/tag/"+$tag)
+              }]')
+          done < <(gh release list \
+            --repo "${{ github.repository }}" \
+            --limit "${NUM_RELEASES}" \
+            --json tagName \
+            --jq '.[].tagName')
+
+          echo "${releases_json}" > /tmp/releases.json
+          python3 -c '
+import json
+html = open("site/index.html").read()
+releases = json.load(open("/tmp/releases.json"))
+html = html.replace(
+    "window.RELEASES = window.RELEASES || [];",
+    "window.RELEASES = " + json.dumps(releases) + ";"
+)
+open("site/index.html", "w").write(html)
+'
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build-site
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
