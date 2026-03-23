@@ -20,7 +20,7 @@ idf.py build
 idf.py -p /dev/ttyACM0 flash
 ```
 
-Full build/flash and prebuilt firmware instructions are in the [wiki](https://github.com/slank/esp32-bt/wiki).
+Full build/flash and prebuilt firmware instructions are in the [wiki](https://github.com/slank/esp32-bt/wiki), which also covers manual bring-up, BlueZ usage, and how it works.
 
 ## Linux setup
 
