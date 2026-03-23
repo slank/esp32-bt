@@ -49,6 +49,14 @@ idf.py build
 idf.py -p /dev/ttyACM0 flash   # or use esptool directly
 ```
 
+## Web flasher
+
+Flash firmware directly from your browser (Chrome/Edge required) — no toolchain needed:
+
+**[https://slank.github.io/esp32-bt/](https://slank.github.io/esp32-bt/)**
+
+Connect the device via USB, open the link, and click **Install**.
+
 ## Download prebuilt firmware
 
 Tagged releases publish a firmware bundle that includes:
